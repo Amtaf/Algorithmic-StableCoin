@@ -23,67 +23,187 @@
 // private
 // view & pure functions
 pragma solidity ^0.8.18;
+
+import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
 /**
  * @title DSCEngine
  * @author Fatma
  * @dev This system is designed to be as minimal as possible with 1token == $1 peg.
- *This stablecoin has the following properties:
- *-Exogenous
- *-Dollar Pegged
- *-Algorithmically stable
+ * This stablecoin has the following properties:
+ * -Exogenous
+ * -Dollar Pegged
+ * -Algorithmically stable
  * This system should have more collateral > than the $pegged DSC.
- * @notice This system is the core of the DSC system it handles all the logic 
- for mining and redeeming DCS as well as depositing & withdrawing collateral
+ * @notice This system is the core of the DSC system it handles all the logic
+ *  for mining and redeeming DCS as well as depositing & withdrawing collateral
  * @notice This contract is very loosely based on the MakerDAO DSS (DAI) system.
  */
-contract DSCEngine{
-   /////////////////
+
+contract DSCEngine is ReentrancyGuard {
+    /////////////////
     //Errors
     ////////////////
     error DSCEngine__NeedsMoreThanZero();
     error DSCEngine__tokenAddressesAndPriceFeedAddressMustBeSame();
-   /////////////////
+    error DSCEngine__NotAllowedToken();
+    error DSCEngine__TransferFailed();
+    /////////////////
     //State Variables
     ////////////////
+
     mapping(address token => address priceFeed) private s_priceFeeds; //tokenToPriceFeed
+    mapping(address user => mapping(address token => uint256 amount))
+        private s_collateralDeposited;
+    mapping(address user => uint256 amountDscMinted) private s_DSCMinted;
+    address[] private s_collateralTokens;
+
+    DecentralizedStableCoin private immutable i_dsc;
+
+    /////////////////
+    //EVents
+    ////////////////
+    event collateralDeposited(
+        address indexed user,
+        address indexed token,
+        uint256 amount
+    );
 
     /////////////////
     //Modifiers
     ////////////////
-    modifier moreThanZero(uint256 amount){
-        if(amount==0){
+
+    modifier moreThanZero(uint256 amount) {
+        if (amount == 0) {
             revert DSCEngine__NeedsMoreThanZero();
         }
-            _;
+        _;
     }
 
-    modifier isAllowedToken(address Token){
+    modifier isAllowedToken(address token) {
+        if (s_priceFeeds[token] == address(0)) {
+            revert DSCEngine__NotAllowedToken();
+        }
         _;
     }
 
     /////////////////
     //Functions
     ////////////////
-    constructor(address [] memory tokenAddresses, address[] memory priceFeedAddress){
-        if(tokenAddresses.length != priceFeedAddress.length){
+    constructor(
+        address[] memory tokenAddresses,
+        address[] memory priceFeedAddress,
+        address dscAddress
+    ) {
+        if (tokenAddresses.length != priceFeedAddress.length) {
             revert DSCEngine__tokenAddressesAndPriceFeedAddressMustBeSame();
         }
+        for (uint256 i = 0; i < tokenAddresses.length; i++) {
+            s_priceFeeds[tokenAddresses[i] = priceFeedAddress[i]];
+            s_collateralTokens.push(tokenAddresses[i]);
+        }
+        i_dsc = DecentralizedStableCoin(dscAddress);
     }
 
     /////////////////
     //External Functions
     ////////////
-    function depositCollateralAndMintDSC() external{}
+    function depositCollateralAndMintDSC() external {}
+
     /*
-    *@param tokenCollateralAddress The address of the Token to deposit as collateral
-    *@param amountCollateral The amount of collateral to deposit
+     *@param tokenCollateralAddress The address of the Token to deposit as collateral
+     *@param amountCollateral The amount of collateral to deposit
+     */
+
+    function depositCollateral(
+        address tokenCollateralAddress,
+        uint256 amountCollateral
+    )
+        external
+        moreThanZero(amountCollateral)
+        isAllowedToken(tokenCollateralAddress)
+        nonReentrant
+    {
+        s_collateralDeposited[msg.sender][
+            tokenCollateralAddress
+        ] += amountCollateral;
+        emit collateralDeposited(
+            msg.sender,
+            tokenCollateralAddress,
+            amountCollateral
+        );
+        bool success = IERC20(tokenCollateralAddress).transferFrom(
+            msg.sender,
+            address(this),
+            amountCollateral
+        );
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+    }
+
+    function redeemCollateralForDsc() external {}
+
+    function redeemCollateral() external {}
+
+    /*
+    *@notice follows CEI
+    *@param amountDscToMint The amount of decentralized stablecoin to mint
+    @notice must have collateral value>DSC.This will involve Pricefeeds,Values etc
     */
-    function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral) external moreThanZero(amountCollateral){}
-    function redeemCollateralForDsc() external{}
-    function redeemCollateral() external{}
-    function mintDsc() external{}
-    function burnDsc() external{}
-    function liquidate() external{}
+    function mintDsc(
+        uint256 amountDscToMint
+    ) external moreThanZero(amountDscToMint) nonReentrant {
+        ///check if the collateral value>DSC.This will involve Pricefeeds,Values etc
+        s_DSCMinted[msg.sender] += amountDscToMint;
+    }
+
+    function burnDsc() external {}
+
+    function liquidate() external {}
+
     function getHealthFactor() external view {}
+
+    /////////////////
+    //Private & Internal view Functions
+    ////////////
+    function _getAccountInformation(
+        address user
+    )
+        private
+        view
+        returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+    {
+        totalDscMinted = s_DSCMinted[user];
+        collateralValueInUsd = getAccountCollateralValue(user);
+    }
+
+    /*
+     *Returns how close to liquidation a user is
+     *if a user goes below 1, then they can get liquidated
+     */
+    function _healthFactor(address user) private view returns (uint256) {}
+
+    function _revertIfHealthFactorIsBroken(address user) internal view {}
+
+    /////////////////
+    //Public & External view Functions
+    ////////////
+    function getAccountCollateralValue(
+        address user
+    ) public view returns (uint256) {
+        //loop through each collateral token and
+        //get the amount they have deposited and map it to the price,to get the USD Value
+        // for(uint256 i; i<s_collateralTokens.length; i++){
+        //     address token = s_collateralTokens[i];
+        //     uint256 amount = s_collateralDeposited[user][token];
+        //     totalCollateralValueInusd +=
+        // }
+    }function getUsdValue(address token, uint256 amount) public view returns(uint256){
+
+    }
+
 
 }
