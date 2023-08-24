@@ -54,6 +54,7 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__BreaksHealthfactor(uint256 healthFactor);
     error DSCEngine__MintFailed();
     error DSCEngine__HealthFactorOk();
+    error DSCEngine__HealthFactorNotImproved();
     /////////////////
     //State Variables
     ////////////////
@@ -206,13 +207,7 @@ contract DSCEngine is ReentrancyGuard {
 
     function burnDsc(uint256 amount) public moreThanZero(amount){
         //remove the DSC minted
-        s_DSCMinted[msg.sender] -= amount;
-        bool success = i_dsc.transferFrom(msg.sender, address(this), amount);
-        if(!success){
-            revert DSCEngine__TransferFailed();
-
-        }
-        i_dsc.burn(amount);
+        _burnDsc(amount, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender);
     }
     //If we do start nearing undercollateralizatioon , we need someone to liquidate positions
@@ -243,6 +238,14 @@ contract DSCEngine is ReentrancyGuard {
         uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
         uint256 totalCollateralToRedeem  = tokenAmountFromDebtCovered + bonusCollateral;
         _redeemCollateral(collateral, totalCollateralToRedeem,  msg.sender, user);
+        //we need to burn DSC
+        _burnDsc(debtToCover, user, msg.sender);
+
+        uint256 endingUserHealthfactor = _healthFactor(user);
+        if(endingUserHealthfactor<=startingUserHealthFactor){
+            revert DSCEngine__HealthFactorNotImproved();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
     }
 
     function getHealthFactor() external view {}
@@ -250,6 +253,19 @@ contract DSCEngine is ReentrancyGuard {
     /////////////////
     //Private & Internal view Functions
     ////////////
+     /*
+     *@dev Low-level internal function, do not call unless the function calling it is
+     *checking for health factor being broken
+     */
+    function _burnDsc(uint256 amountDscToBurn,address onBehalfOf, address dscFrom) private {
+        s_DSCMinted[onBehalfOf] -= amountDscToBurn;
+        bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
+        if(!success){
+            revert DSCEngine__TransferFailed();
+
+        }
+
+    }
     function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral,address from, address to) private{
          s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(from, to, tokenCollateralAddress , amountCollateral);
