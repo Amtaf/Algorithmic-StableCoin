@@ -73,11 +73,12 @@ contract DSCEngine is ReentrancyGuard {
     /////////////////
     //EVents
     ////////////////
-    event collateralDeposited(
+    event CollateralDeposited(
         address indexed user,
         address indexed token,
         uint256 amount
     );
+    event CollateralRedeemed(address indexed user,uint256 indexed amount,address indexed token);
 
     /////////////////
     //Modifiers
@@ -149,7 +150,7 @@ contract DSCEngine is ReentrancyGuard {
         s_collateralDeposited[msg.sender][
             tokenCollateralAddress
         ] += amountCollateral;
-        emit collateralDeposited(
+        emit CollateralDeposited(
             msg.sender,
             tokenCollateralAddress,
             amountCollateral
@@ -162,11 +163,25 @@ contract DSCEngine is ReentrancyGuard {
         if (!success) {
             revert DSCEngine__TransferFailed();
         }
+        _revertIfHealthFactorIsBroken(msg.sender);
     }
 
     function redeemCollateralForDsc() external {}
+    // In order to redeem collateral:
+    //1. health factor must be over 1 After collateral pulled
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+     external moreThanZero(amountCollateral)
+      nonReentrant(){
+        s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(msg.sender, amountCollateral, tokenCollateralAddress);
 
-    function redeemCollateral() external {}
+        bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
+        if(!success){
+            revert DSCEngine__TransferFailed();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
+
+      }
 
     /*
     *@notice follows CEI
