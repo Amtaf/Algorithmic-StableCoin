@@ -316,7 +316,7 @@ contract DSCEngine is ReentrancyGuard {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
         (,int256 price,,,) = priceFeed.latestRoundData();
         //($10e18*1e18) / ($2000e8*1e18)
-        return (usdAmountInWei*PRECISION) / uint256(price) * ADDITIONAL_FEED_PRECISION;
+        return ((usdAmountInWei*PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION));
         
     }
     function getAccountCollateralValue(
@@ -338,6 +338,9 @@ contract DSCEngine is ReentrancyGuard {
         (, int256 price,,,) = priceFeed.latestRoundData();
         return ((uint256(price)*ADDITIONAL_FEED_PRECISION)*amount)/PRECISION;
 
+    }
+    function getAccountInformation(address user) external view returns(uint256 totalDscMinted, uint256 collateralValueInUsd){
+        (totalDscMinted,collateralValueInUsd) = _getAccountInformation(user);
     }
 
 
